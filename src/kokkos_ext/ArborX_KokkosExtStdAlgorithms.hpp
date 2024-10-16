@@ -17,6 +17,8 @@
 #include <Kokkos_Core.hpp>
 #include <Kokkos_StdAlgorithms.hpp>
 
+#include "kokkos_ext/Kokkos_Graph_Execution.hpp"
+
 namespace ArborX::Details::KokkosExt
 {
 
@@ -24,8 +26,30 @@ using Kokkos::Experimental::adjacent_difference;
 using Kokkos::Experimental::exclusive_scan;
 using Kokkos::Experimental::reduce;
 
+template <typename ViewType>
+struct Iota
+{
+    ViewType data;
+    typename ViewType::value_type value;
+    template <std::integral T>
+    KOKKOS_FUNCTION
+    void operator()(const T index) const {
+        data(index) = value + (typename ViewType::value_type)index;
+    }
+
+    template <typename Exec>
+    auto apply(Exec&& exec) const
+    {
+        return std::forward<Exec>(exec) | Kokkos::Experimental::graph::parallel_for(
+            "ArborX::Algorithms::iota",
+            Kokkos::RangePolicy(/* space,*/ 0, data.extent(0)),
+            *this
+        );
+    }
+};
+
 template <typename ExecutionSpace, typename ViewType>
-void iota(ExecutionSpace const &space, ViewType const &v,
+auto iota(ExecutionSpace const &space, ViewType const &v,
           typename ViewType::value_type value = 0)
 {
   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value);
@@ -43,9 +67,10 @@ void iota(ExecutionSpace const &space, ViewType const &v,
       std::is_same_v<ValueType, typename ViewType::non_const_value_type>,
       "iota requires a View with non-const value type");
 
-  Kokkos::parallel_for(
-      "ArborX::Algorithms::iota", Kokkos::RangePolicy(space, 0, v.extent(0)),
-      KOKKOS_LAMBDA(int i) { v(i) = value + (ValueType)i; });
+//   return space | Kokkos::parallel_for(
+//       "ArborX::Algorithms::iota", Kokkos::RangePolicy(space, 0, v.extent(0)),
+//       KOKKOS_LAMBDA(int i) { v(i) = value + (ValueType)i; });
+    return Iota{.data = v, .value = value}.apply(space);
 }
 
 } // namespace ArborX::Details::KokkosExt

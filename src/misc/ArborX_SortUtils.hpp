@@ -30,16 +30,17 @@ auto sortObjects(ExecutionSpace const &space, ViewType &view)
   Kokkos::Profiling::pushRegion("ArborX::Sorting");
 
   Kokkos::View<SizeType *, typename ViewType::device_type> permute(
-      Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+      Kokkos::view_alloc(/* space, */ Kokkos::WithoutInitializing,
                          "ArborX::Sorting::permute"),
       view.extent(0));
-  KokkosExt::iota(space, permute);
+  decltype(auto) chain_iota = KokkosExt::iota(space, permute);
 
-  KokkosExt::sortByKey(space, view, permute);
+  // Commenting this for now because it goes deep down to Kokkos stuff...
+  // decltype(auto) chain_sbk = KokkosExt::sortByKey(chain_iota, view, permute);
 
   Kokkos::Profiling::popRegion();
 
-  return permute;
+  return std::make_tuple(permute, chain_iota);
 }
 
 template <typename ExecutionSpace, typename PermutationView, typename InputView,

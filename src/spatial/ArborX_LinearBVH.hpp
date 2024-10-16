@@ -91,7 +91,7 @@ public:
   template <typename ExecutionSpace, typename UserPredicates,
             typename CallbackOrView, typename View, typename... Args>
   std::enable_if_t<Kokkos::is_view_v<std::decay_t<View>>>
-  query(ExecutionSpace const &space, UserPredicates const &user_predicates,
+  query(ExecutionSpace &space, UserPredicates const &user_predicates,
         CallbackOrView &&callback_or_view, View &&view, Args &&...args) const
   {
     Kokkos::Profiling::ScopedRegion guard("ArborX::BVH::query_crs");
@@ -162,7 +162,7 @@ private:
   using internal_node_type = Details::InternalNode<bounding_volume_type>;
 
   size_type _size{0};
-  bounding_volume_type _bounds;
+  bounding_volume_type _bounds; // should be a dual view / device view of rank 1
   Kokkos::View<leaf_node_type *, MemorySpace> _leaf_nodes;
   Kokkos::View<internal_node_type *, MemorySpace> _internal_nodes;
   IndexableGetter _indexable_getter;
@@ -193,21 +193,21 @@ template <typename MemorySpace, typename Value, typename IndexableGetter,
 template <typename ExecutionSpace, typename UserValues,
           typename SpaceFillingCurve>
 BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
-    BoundingVolumeHierarchy(ExecutionSpace const &space,
+    BoundingVolumeHierarchy(ExecutionSpace const &space, // remove const to assign at the end of the constructor ?
                             UserValues const &user_values,
                             IndexableGetter const &indexable_getter,
                             SpaceFillingCurve const &curve)
     : _size(AccessTraits<UserValues, PrimitivesTag>::size(user_values))
-    , _leaf_nodes(Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+    , _leaf_nodes(Kokkos::view_alloc(/* space,*/ Kokkos::WithoutInitializing,
                                      "ArborX::BVH::leaf_nodes"),
                   _size)
-    , _internal_nodes(Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+    , _internal_nodes(Kokkos::view_alloc(/* space, */ Kokkos::WithoutInitializing,
                                          "ArborX::BVH::internal_nodes"),
                       _size > 1 ? _size - 1 : 0)
     , _indexable_getter(indexable_getter)
 {
-  static_assert(Details::KokkosExt::is_accessible_from<MemorySpace,
-                                                       ExecutionSpace>::value);
+  /* static_assert(Details::KokkosExt::is_accessible_from<MemorySpace,
+                                                       ExecutionSpace>::value);*/
   // FIXME redo with RangeTraits
   Details::check_valid_access_traits<UserValues>(
       PrimitivesTag{}, user_values, Details::DoNotCheckGetReturnType());
@@ -215,10 +215,10 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
   using Values = Details::AccessValues<UserValues, PrimitivesTag>;
   Values values{user_values}; // NOLINT
 
-  static_assert(
+  /* static_assert(
       Details::KokkosExt::is_accessible_from<typename Values::memory_space,
                                              ExecutionSpace>::value,
-      "Values must be accessible from the execution space");
+      "Values must be accessible from the execution space"); */
 
   constexpr int DIM = GeometryTraits::dimension_v<BoundingVolume>;
 
@@ -245,38 +245,40 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
       "ArborX::BVH::BVH::calculate_scene_bounding_box");
 
   // determine the bounding box of the scene
-  Box<DIM, typename GeometryTraits::coordinate_type_t<BoundingVolume>> bbox{};
-  Details::TreeConstruction::calculateBoundingBoxOfTheScene(space, indexables,
+  using box_t = Box<DIM, typename GeometryTraits::coordinate_type_t<BoundingVolume>>;
+  Kokkos::View<box_t, MemorySpace> bbox(Kokkos::view_alloc("bounding box of the scene" /*, space */));
+  decltype(auto) chain_BBox = Details::TreeConstruction::calculateBoundingBoxOfTheScene(space, indexables,
                                                             bbox);
   Kokkos::Profiling::popRegion();
   Kokkos::Profiling::pushRegion("ArborX::BVH::BVH::compute_linear_ordering");
 
   // Map indexables from multidimensional domain to one-dimensional interval
   using LinearOrderingValueType =
-      std::invoke_result_t<SpaceFillingCurve, decltype(bbox), indexable_type>;
+      std::invoke_result_t<SpaceFillingCurve, box_t, indexable_type>;
   Kokkos::View<LinearOrderingValueType *, MemorySpace> linear_ordering_indices(
-      Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+      Kokkos::view_alloc(/* space, */ Kokkos::WithoutInitializing,
                          "ArborX::BVH::BVH::linear_ordering"),
       size());
-  Details::TreeConstruction::projectOntoSpaceFillingCurve(
-      space, indexables, curve, bbox, linear_ordering_indices);
+  decltype(auto) chain_Curve = Details::TreeConstruction::projectOntoSpaceFillingCurve(
+      chain_BBox, indexables, curve, bbox, linear_ordering_indices);
 
   Kokkos::Profiling::popRegion();
   Kokkos::Profiling::pushRegion("ArborX::BVH::BVH::sort_linearized_order");
 
   // Compute the ordering of the indexables along the space-filling curve
-  auto permutation_indices =
-      Details::sortObjects(space, linear_ordering_indices);
+  auto [permutation_indices, chain_sort] =
+      Details::sortObjects(chain_Curve, linear_ordering_indices);
 
   Kokkos::Profiling::popRegion();
   Kokkos::Profiling::pushRegion("ArborX::BVH::BVH::generate_hierarchy");
 
   // Generate bounding volume hierarchy
-  Details::TreeConstruction::generateHierarchy(
-      space, values, _indexable_getter, permutation_indices,
+  /* decltype(auto) chain_hi */ = Details::TreeConstruction::generateHierarchy(
+      chain_sort, values, _indexable_getter, permutation_indices,
       linear_ordering_indices, _leaf_nodes, _internal_nodes, _bounds);
 
   Kokkos::Profiling::popRegion();
+  // space = chain_hi;
 }
 
 template <typename MemorySpace, typename Value, typename IndexableGetter,

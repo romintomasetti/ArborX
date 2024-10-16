@@ -81,7 +81,7 @@ template <typename OutputView>
 using OutputFunctorHelper = Sink<typename OutputView::value_type>;
 
 template <class Callback>
-void check_generic_lambda_support(Callback const &)
+constexpr void check_generic_lambda_support(Callback const &)
 {
 #ifdef __NVCC__
   // Without it would get a segmentation fault and no diagnostic whatsoever

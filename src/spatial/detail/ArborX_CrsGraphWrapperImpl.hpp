@@ -337,7 +337,7 @@ template <typename Tag, typename Tree, typename ExecutionSpace,
           typename Callback>
 std::enable_if_t<!is_tagged_post_callback<Callback>::value &&
                  Kokkos::is_view_v<OutputView> && Kokkos::is_view_v<OffsetView>>
-queryDispatch(Tag, Tree const &tree, ExecutionSpace const &space,
+queryDispatch(Tag, Tree const &tree, ExecutionSpace &space,
               Predicates const &predicates, Callback const &callback,
               OutputView &out, OffsetView &offset,
               Experimental::TraversalPolicy const &policy =

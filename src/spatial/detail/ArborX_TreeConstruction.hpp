@@ -21,43 +21,86 @@
 
 #include <Kokkos_Core.hpp>
 
+#include "kokkos_ext/Kokkos_Graph_Execution.hpp"
+
 namespace ArborX::Details::TreeConstruction
 {
 
+//! Because NVCC does not like deduced return type when there is some host device lambda.
+template <typename Indexables>
+struct calculateBoundingBoxOfTheSceneFunctor
+{
+  Indexables indexables;
+
+  template <std::integral T, typename BoxType>
+  KOKKOS_FUNCTION
+  void operator()(const T i, BoxType &update) const {
+    using Details::expand;
+    expand(update, indexables(i));
+  }
+};
+
 template <typename ExecutionSpace, typename Indexables, typename Box>
-inline void calculateBoundingBoxOfTheScene(ExecutionSpace const &space,
+auto calculateBoundingBoxOfTheScene(ExecutionSpace const &space,
                                            Indexables const &indexables,
                                            Box &scene_bounding_box)
 {
-  Kokkos::parallel_reduce(
+  static_assert(Kokkos::is_view_v<Box> && Box::rank() == 0);
+  return space | Kokkos::Experimental::graph::parallel_reduce(
       "ArborX::TreeConstruction::calculate_bounding_box_of_the_scene",
       Kokkos::RangePolicy(space, 0, indexables.size()),
-      KOKKOS_LAMBDA(int i, Box &update) {
-        using Details::expand;
-        expand(update, indexables(i));
-      },
-      GeometryReducer<Box>(scene_bounding_box));
+      // KOKKOS_LAMBDA(int i, Box &update) {
+      //   using Details::expand;
+      //   expand(update, indexables(i));
+      // },
+      calculateBoundingBoxOfTheSceneFunctor{.indexables = indexables},
+      GeometryReducer<typename Box::value_type, typename Box::memory_space>(scene_bounding_box));
 }
+
+template <typename Indexables, typename Curve, typename Box, typename LinearOrdering>
+struct projectOntoSpaceFillingCurveFunctor
+{
+  Indexables indexables;
+  Curve curve;
+  Box box;
+  LinearOrdering linear_ordering_indices;
+
+  static_assert(Kokkos::is_view_v<Box> && Box::rank() == 0);
+
+  template <std::integral T>
+  KOKKOS_FUNCTION
+  void operator()(const T i) const {
+    linear_ordering_indices(i) = curve(box(), indexables(i));
+  }
+};
 
 template <typename ExecutionSpace, typename Indexables,
           typename SpaceFillingCurve, typename Box, typename LinearOrdering>
-inline void projectOntoSpaceFillingCurve(ExecutionSpace const &space,
+auto projectOntoSpaceFillingCurve(ExecutionSpace const &space,
                                          Indexables const &indexables,
                                          SpaceFillingCurve const &curve,
                                          Box const &scene_bounding_box,
                                          LinearOrdering linear_ordering_indices)
 {
+  static_assert(Kokkos::is_view_v<Box> && Box::rank() == 0);
   size_t const n = indexables.size();
   ARBORX_ASSERT(linear_ordering_indices.extent(0) == n);
   static_assert(
       std::is_same_v<typename LinearOrdering::value_type,
-                     decltype(curve(scene_bounding_box, indexables(0)))>);
+                     decltype(curve(scene_bounding_box(), indexables(0)))>);
 
-  Kokkos::parallel_for(
+  return space | Kokkos::Experimental::graph::parallel_for(
       "ArborX::TreeConstruction::project_primitives_onto_space_filling_curve",
-      Kokkos::RangePolicy(space, 0, n), KOKKOS_LAMBDA(int i) {
-        linear_ordering_indices(i) = curve(scene_bounding_box, indexables(i));
+      Kokkos::RangePolicy(space, 0, n),
+      projectOntoSpaceFillingCurveFunctor{
+        .indexables = indexables,
+        .curve = curve,
+        .box = scene_bounding_box,
+        .linear_ordering_indices = linear_ordering_indices
       });
+      // KOKKOS_LAMBDA(int i) {
+      //   linear_ordering_indices(i) = curve(scene_bounding_box(), indexables(i));
+      // });
 }
 
 template <typename ExecutionSpace, typename Values, typename IndexableGetter,
@@ -72,7 +115,7 @@ initializeSingleLeafTree(ExecutionSpace const &space, Values const &values,
 
   // Skip initialization so that we don't execute a kernel launch
   Kokkos::View<BoundingVolume, typename Nodes::memory_space> bounding_volume(
-      Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+      Kokkos::view_alloc(/* space, */ Kokkos::WithoutInitializing,
                          "ArborX::BVH::getSingleLeafBounds::bounding_volume"));
   Kokkos::parallel_for(
       "ArborX::TreeConstruction::initialize_single_leaf_tree",
@@ -104,7 +147,7 @@ class GenerateHierarchy
 
 public:
   template <typename ExecutionSpace>
-  GenerateHierarchy(ExecutionSpace const &space, Values const &values,
+  GenerateHierarchy(ExecutionSpace &space, Values const &values, /* for assigning */
                     IndexableGetter const &indexable_getter,
                     PermutationIndices const &permutation_indices,
                     LinearOrdering const &sorted_morton_codes,
@@ -121,14 +164,14 @@ public:
                 internal_nodes.extent(0))
       , _num_internal_nodes(_internal_nodes.extent_int(0))
   {
-    Kokkos::deep_copy(space, _ranges, UNTOUCHED_NODE);
+    Kokkos::deep_copy(/* space */, _ranges, UNTOUCHED_NODE);
 
-    Kokkos::parallel_for("ArborX::TreeConstruction::generate_hierarchy",
-                         Kokkos::RangePolicy(space, 0, leaf_nodes.extent(0)),
+    decltype(auto) next_k = space |  Kokkos::parallel_for("ArborX::TreeConstruction::generate_hierarchy",
+                         Kokkos::RangePolicy(/* space */, 0, leaf_nodes.extent(0)),
                          *this);
 
     Kokkos::deep_copy(
-        space,
+        /* space */,
         Kokkos::View<BoundingVolume, Kokkos::HostSpace,
                      Kokkos::MemoryUnmanaged>(&bounds),
         Kokkos::View<BoundingVolume const, MemorySpace,
@@ -349,7 +392,7 @@ template <typename ExecutionSpace, typename Values, typename IndexableGetter,
           typename... LinearOrderingViewProperties, typename LeafNodes,
           typename InternalNodes>
 void generateHierarchy(
-    ExecutionSpace const &space, Values const &values,
+    ExecutionSpace /* const */ &space, Values const &values, // for assigning
     IndexableGetter const &indexable_getter,
     Kokkos::View<unsigned int *, PermutationIndicesViewProperties...>
         permutation_indices,
@@ -363,7 +406,7 @@ void generateHierarchy(
   using ConstLinearOrdering = Kokkos::View<LinearOrderingValueType const *,
                                            LinearOrderingViewProperties...>;
 
-  GenerateHierarchy(space, values, indexable_getter,
+  return GenerateHierarchy(space, values, indexable_getter,
                     ConstPermutationIndices(permutation_indices),
                     ConstLinearOrdering(sorted_morton_codes), leaf_nodes,
                     internal_nodes, bounds);
