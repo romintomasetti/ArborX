@@ -42,7 +42,7 @@ public:
 
   template <typename ExecutionSpace, typename Predicates, typename Box,
             typename SpaceFillingCurve>
-  static Kokkos::View<unsigned int *, DeviceType>
+  static auto
   sortPredicatesAlongSpaceFillingCurve(ExecutionSpace const &space,
                                        SpaceFillingCurve const &curve,
                                        Box const &scene_bounding_box,

@@ -46,6 +46,8 @@ struct PermutedData<Data, Permute, /*AttachIndices=*/true>
   Data _data;
   Permute _permute;
 
+  // static_assert(Kokkos::is_view_v<Permute>);
+
   KOKKOS_FUNCTION decltype(auto) operator()(int i) const
   {
     return attach(_data(_permute(i)), i);

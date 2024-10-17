@@ -164,18 +164,19 @@ public:
                 internal_nodes.extent(0))
       , _num_internal_nodes(_internal_nodes.extent_int(0))
   {
-    Kokkos::deep_copy(/* space */, _ranges, UNTOUCHED_NODE);
+    Kokkos::deep_copy(/* space, */ _ranges, UNTOUCHED_NODE);
 
-    decltype(auto) next_k = space |  Kokkos::parallel_for("ArborX::TreeConstruction::generate_hierarchy",
-                         Kokkos::RangePolicy(/* space */, 0, leaf_nodes.extent(0)),
+    decltype(auto) next_k = space | Kokkos::Experimental::graph::parallel_for("ArborX::TreeConstruction::generate_hierarchy",
+                         Kokkos::RangePolicy(/* space, */ 0, leaf_nodes.extent(0)),
                          *this);
 
     Kokkos::deep_copy(
-        /* space */,
+        /* space, */
         Kokkos::View<BoundingVolume, Kokkos::HostSpace,
                      Kokkos::MemoryUnmanaged>(&bounds),
         Kokkos::View<BoundingVolume const, MemorySpace,
                      Kokkos::MemoryUnmanaged>(getRootBoundingVolumePtr()));
+    space = next_k;
   }
 
   KOKKOS_FUNCTION
@@ -406,7 +407,8 @@ void generateHierarchy(
   using ConstLinearOrdering = Kokkos::View<LinearOrderingValueType const *,
                                            LinearOrderingViewProperties...>;
 
-  return GenerateHierarchy(space, values, indexable_getter,
+  // should instead return (probably)
+  /* return */ GenerateHierarchy(space, values, indexable_getter,
                     ConstPermutationIndices(permutation_indices),
                     ConstLinearOrdering(sorted_morton_codes), leaf_nodes,
                     internal_nodes, bounds);

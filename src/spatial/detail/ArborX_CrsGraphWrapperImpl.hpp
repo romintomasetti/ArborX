@@ -388,12 +388,12 @@ queryDispatch(Tag, Tree const &tree, ExecutionSpace &space,
         scene_bounding_box{};
     using namespace Details;
     expand(scene_bounding_box, tree.bounds());
-    auto permute = Details::BatchedQueries<DeviceType>::
+    auto [permute, chain_next] = Details::BatchedQueries<DeviceType>::
         sortPredicatesAlongSpaceFillingCurve(space, Experimental::Morton32(),
                                              scene_bounding_box, predicates);
     Kokkos::Profiling::popRegion();
 
-    queryImpl(space, tree, predicates, callback, out, offset, permute,
+    queryImpl(chain_next, tree, predicates, callback, out, offset, permute,
               buffer_status);
   }
   else

@@ -38,38 +38,31 @@ struct TreeTraversal<BVH, Predicates, Callback, SpatialPredicateTag>
   Predicates _predicates;
   Callback _callback;
 
-  template <typename ExecutionSpace>
-  TreeTraversal(ExecutionSpace const &space, BVH const &bvh,
-                Predicates const &predicates, Callback const &callback)
-      : _bvh{bvh}
-      , _predicates{predicates}
-      , _callback{callback}
+  // todo forward exec appropriately
+  template <typename Exec>
+  auto apply(Exec&& exec) const
   {
     if (_bvh.empty())
     {
-      // do nothing
+      return exec;
     }
     else if (_bvh.size() == 1)
     {
-      Kokkos::parallel_for(
+      return exec | Kokkos::Experimental::graph::parallel_for(
           "ArborX::TreeTraversal::spatial::degenerated_one_leaf_tree",
-          Kokkos::RangePolicy<ExecutionSpace, OneLeafTree>(space, 0,
-                                                           predicates.size()),
+          // must extract execution space otherwise cannot compile because of tag
+          Kokkos::RangePolicy<typename std::remove_cvref_t<Exec>::execution_space, OneLeafTree>(/* exec,*/ 0,
+                                                           _predicates.size()),
           *this);
     }
     else
     {
-      Kokkos::parallel_for("ArborX::TreeTraversal::spatial",
-                           Kokkos::RangePolicy<ExecutionSpace, FullTree>(
-                               space, 0, predicates.size()),
+      return exec | Kokkos::Experimental::graph::parallel_for("ArborX::TreeTraversal::spatial",
+                           Kokkos::RangePolicy<typename std::remove_cvref_t<Exec>::execution_space, FullTree>(
+                               /* exec ,*/ 0, _predicates.size()),
                            *this);
     }
   }
-
-  KOKKOS_FUNCTION TreeTraversal(BVH const &bvh, Callback const &callback)
-      : _bvh{bvh}
-      , _callback{callback}
-  {}
 
   struct OneLeafTree
   {};
@@ -488,12 +481,13 @@ struct TreeTraversal<BVH, Predicates, Callback, OrderedSpatialPredicateTag>
 
 template <typename ExecutionSpace, typename BVH, typename Predicates,
           typename Callback>
-void traverse(ExecutionSpace const &space, BVH const &bvh,
+auto traverse(const ExecutionSpace &space, BVH const &bvh,
               Predicates const &predicates, Callback const &callback)
 {
   using Tag = typename Predicates::value_type::Tag;
-  TreeTraversal<BVH, Predicates, Callback, Tag>(space, bvh, predicates,
-                                                callback);
+  const auto tt = TreeTraversal<BVH, Predicates, Callback, Tag>{._bvh = bvh, ._predicates = predicates,
+                                                ._callback = callback};
+  return tt.apply(space);
 }
 
 } // namespace Details

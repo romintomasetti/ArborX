@@ -83,7 +83,7 @@ public:
   bounding_volume_type bounds() const noexcept { return _bounds; }
 
   template <typename ExecutionSpace, typename Predicates, typename Callback>
-  void query(ExecutionSpace const &space, Predicates const &predicates,
+  auto query(ExecutionSpace const &space, Predicates const &predicates,
              Callback const &callback,
              Experimental::TraversalPolicy const &policy =
                  Experimental::TraversalPolicy()) const;
@@ -273,7 +273,9 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
   Kokkos::Profiling::pushRegion("ArborX::BVH::BVH::generate_hierarchy");
 
   // Generate bounding volume hierarchy
-  /* decltype(auto) chain_hi */ = Details::TreeConstruction::generateHierarchy(
+  /* decltype(auto) chain_hi = I'm modifying with a ref&
+     but a refactor might be needed.
+  */ Details::TreeConstruction::generateHierarchy(
       chain_sort, values, _indexable_getter, permutation_indices,
       linear_ordering_indices, _leaf_nodes, _internal_nodes, _bounds);
 
@@ -284,7 +286,7 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
 template <typename MemorySpace, typename Value, typename IndexableGetter,
           typename BoundingVolume>
 template <typename ExecutionSpace, typename UserPredicates, typename Callback>
-void BoundingVolumeHierarchy<
+auto BoundingVolumeHierarchy<
     MemorySpace, Value, IndexableGetter,
     BoundingVolume>::query(ExecutionSpace const &space,
                            UserPredicates const &user_predicates,
@@ -322,7 +324,7 @@ void BoundingVolumeHierarchy<
     static_assert(std::is_void_v<Tag>, "ArborX implementation bug");
   }
 
-  Kokkos::Profiling::pushRegion(profiling_prefix);
+  Kokkos::Profiling::ScopedRegion guard(profiling_prefix);
 
   if (policy._sort_predicates)
   {
@@ -333,22 +335,20 @@ void BoundingVolumeHierarchy<
         scene_bounding_box{};
     using namespace Details;
     expand(scene_bounding_box, bounds());
-    auto permute = Details::BatchedQueries<DeviceType>::
+    auto [permute, chain_sort] = Details::BatchedQueries<DeviceType>::
         sortPredicatesAlongSpaceFillingCurve(space, Experimental::Morton32(),
                                              scene_bounding_box, predicates);
     Kokkos::Profiling::popRegion();
 
     using PermutedPredicates =
         Details::PermutedData<Predicates, decltype(permute)>;
-    Details::traverse(space, *this, PermutedPredicates{predicates, permute},
+    return Details::traverse(chain_sort, *this, PermutedPredicates{predicates, permute},
                       callback);
   }
   else
   {
-    Details::traverse(space, *this, predicates, callback);
+    return Details::traverse(space, *this, predicates, callback);
   }
-
-  Kokkos::Profiling::popRegion();
 }
 
 } // namespace ArborX
