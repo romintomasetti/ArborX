@@ -48,7 +48,7 @@ auto calculateBoundingBoxOfTheScene(ExecutionSpace const &space,
   static_assert(Kokkos::is_view_v<Box> && Box::rank() == 0);
   return space | Kokkos::Experimental::graph::parallel_reduce(
       "ArborX::TreeConstruction::calculate_bounding_box_of_the_scene",
-      Kokkos::RangePolicy(space, 0, indexables.size()),
+      Kokkos::RangePolicy<typename std::remove_cvref_t<ExecutionSpace>::execution_space>(/*space,*/ 0, indexables.size()),
       // KOKKOS_LAMBDA(int i, Box &update) {
       //   using Details::expand;
       //   expand(update, indexables(i));
@@ -91,7 +91,7 @@ auto projectOntoSpaceFillingCurve(ExecutionSpace const &space,
 
   return space | Kokkos::Experimental::graph::parallel_for(
       "ArborX::TreeConstruction::project_primitives_onto_space_filling_curve",
-      Kokkos::RangePolicy(space, 0, n),
+      Kokkos::RangePolicy<typename std::remove_cvref_t<ExecutionSpace>::execution_space>(/*space,*/ 0, n),
       projectOntoSpaceFillingCurveFunctor{
         .indexables = indexables,
         .curve = curve,
@@ -147,27 +147,30 @@ class GenerateHierarchy
 
 public:
   template <typename ExecutionSpace>
-  GenerateHierarchy(ExecutionSpace &space, Values const &values, /* for assigning */
+  GenerateHierarchy(ExecutionSpace && /*exec*/, Values const &values, /* for assigning */
                     IndexableGetter const &indexable_getter,
                     PermutationIndices const &permutation_indices,
                     LinearOrdering const &sorted_morton_codes,
-                    LeafNodes leaf_nodes, InternalNodes internal_nodes,
-                    BoundingVolume &bounds)
+                    LeafNodes leaf_nodes, InternalNodes internal_nodes)
       : _values(values)
       , _indexable_getter(indexable_getter)
       , _permutation_indices(permutation_indices)
       , _sorted_morton_codes(sorted_morton_codes)
       , _leaf_nodes(leaf_nodes)
       , _internal_nodes(internal_nodes)
-      , _ranges(Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+      , _ranges(Kokkos::view_alloc(/* space, */ Kokkos::WithoutInitializing,
                                    "ArborX::BVH::BVH::ranges"),
                 internal_nodes.extent(0))
       , _num_internal_nodes(_internal_nodes.extent_int(0))
+  {}
+
+  template <typename Exec>
+  auto apply(Exec&& exec, BoundingVolume &bounds)
   {
     Kokkos::deep_copy(/* space, */ _ranges, UNTOUCHED_NODE);
 
-    decltype(auto) next_k = space | Kokkos::Experimental::graph::parallel_for("ArborX::TreeConstruction::generate_hierarchy",
-                         Kokkos::RangePolicy(/* space, */ 0, leaf_nodes.extent(0)),
+    decltype(auto) next_k = exec | Kokkos::Experimental::graph::parallel_for("ArborX::TreeConstruction::generate_hierarchy",
+                         Kokkos::RangePolicy<typename std::remove_cvref_t<Exec>::execution_space>(/* space, */ 0, _leaf_nodes.extent(0)),
                          *this);
 
     Kokkos::deep_copy(
@@ -176,7 +179,7 @@ public:
                      Kokkos::MemoryUnmanaged>(&bounds),
         Kokkos::View<BoundingVolume const, MemorySpace,
                      Kokkos::MemoryUnmanaged>(getRootBoundingVolumePtr()));
-    space = next_k;
+    return next_k; // todo add the deep copy in the graph or make it a rank 0 device view!
   }
 
   KOKKOS_FUNCTION
@@ -392,7 +395,7 @@ template <typename ExecutionSpace, typename Values, typename IndexableGetter,
           typename LinearOrderingValueType,
           typename... LinearOrderingViewProperties, typename LeafNodes,
           typename InternalNodes>
-void generateHierarchy(
+auto generateHierarchy(
     ExecutionSpace /* const */ &space, Values const &values, // for assigning
     IndexableGetter const &indexable_getter,
     Kokkos::View<unsigned int *, PermutationIndicesViewProperties...>
@@ -408,10 +411,10 @@ void generateHierarchy(
                                            LinearOrderingViewProperties...>;
 
   // should instead return (probably)
-  /* return */ GenerateHierarchy(space, values, indexable_getter,
+  return GenerateHierarchy(space, values, indexable_getter,
                     ConstPermutationIndices(permutation_indices),
                     ConstLinearOrdering(sorted_morton_codes), leaf_nodes,
-                    internal_nodes, bounds);
+                    internal_nodes).apply(space, bounds);
 }
 
 } // namespace ArborX::Details::TreeConstruction

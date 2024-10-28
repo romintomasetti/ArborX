@@ -41,7 +41,8 @@ void expandHalfToFull(ExecutionSpace const &space, Offsets &offsets,
           Kokkos::atomic_increment(&offsets(k));
         }
       });
-  KokkosExt::exclusive_scan(space, offsets, offsets, 0);
+  // todo
+  KokkosExt::exclusive_scan(offsets, offsets, 0);
 
   auto const m = KokkosExt::lastElement(space, offsets);
   KokkosExt::reallocWithoutInitializing(space, indices, m);

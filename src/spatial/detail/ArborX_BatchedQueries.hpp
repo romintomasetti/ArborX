@@ -43,7 +43,7 @@ public:
   template <typename ExecutionSpace, typename Predicates, typename Box,
             typename SpaceFillingCurve>
   static auto
-  sortPredicatesAlongSpaceFillingCurve(ExecutionSpace const &space,
+  sortPredicatesAlongSpaceFillingCurve(ExecutionSpace &&space,
                                        SpaceFillingCurve const &curve,
                                        Box const &scene_bounding_box,
                                        Predicates const &predicates)
@@ -55,17 +55,17 @@ public:
     using LinearOrderingValueType =
         std::invoke_result_t<SpaceFillingCurve, Box, Point>;
     Kokkos::View<LinearOrderingValueType *, DeviceType> linear_ordering_indices(
-        Kokkos::view_alloc(space, Kokkos::WithoutInitializing,
+        Kokkos::view_alloc(/*space, */ Kokkos::WithoutInitializing,
                            "ArborX::BVH::query::linear_ordering"),
         n_queries);
-    Kokkos::parallel_for(
+    decltype(auto) tmp = space | Kokkos::Experimental::graph::parallel_for(
         "ArborX::BatchedQueries::project_predicates_onto_space_filling_curve",
-        Kokkos::RangePolicy(space, 0, n_queries), KOKKOS_LAMBDA(int i) {
+        Kokkos::RangePolicy(/*space, */ 0, n_queries), KOKKOS_LAMBDA(int i) {
           linear_ordering_indices(i) = curve(
               scene_bounding_box, returnCentroid(getGeometry(predicates(i))));
         });
 
-    return sortObjects(space, linear_ordering_indices);
+    return sortObjects(tmp, linear_ordering_indices);
   }
 
   // NOTE  trailing return type seems required :(

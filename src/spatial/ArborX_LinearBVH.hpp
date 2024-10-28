@@ -66,12 +66,17 @@ public:
 
   BoundingVolumeHierarchy() = default; // build an empty tree
 
-  template <typename ExecutionSpace, typename Values,
-            typename SpaceFillingCurve = Experimental::Morton64>
+  template <typename ExecutionSpace, typename Values>
   BoundingVolumeHierarchy(
       ExecutionSpace const &space, Values const &values,
-      IndexableGetter const &indexable_getter = IndexableGetter(),
-      SpaceFillingCurve const &curve = SpaceFillingCurve());
+      IndexableGetter const &indexable_getter = IndexableGetter());
+
+  template <typename ExecutionSpace, typename Values,
+            typename SpaceFillingCurve = Experimental::Morton64>
+  auto build(
+      ExecutionSpace &&space, Values const &values,
+      SpaceFillingCurve const &curve = SpaceFillingCurve()
+  ) ;
 
   KOKKOS_FUNCTION
   size_type size() const noexcept { return _size; }
@@ -83,15 +88,15 @@ public:
   bounding_volume_type bounds() const noexcept { return _bounds; }
 
   template <typename ExecutionSpace, typename Predicates, typename Callback>
-  auto query(ExecutionSpace const &space, Predicates const &predicates,
+  auto query(ExecutionSpace&&space, Predicates const &predicates,
              Callback const &callback,
              Experimental::TraversalPolicy const &policy =
                  Experimental::TraversalPolicy()) const;
 
   template <typename ExecutionSpace, typename UserPredicates,
             typename CallbackOrView, typename View, typename... Args>
-  std::enable_if_t<Kokkos::is_view_v<std::decay_t<View>>>
-  query(ExecutionSpace &space, UserPredicates const &user_predicates,
+  requires Kokkos::is_view_v<std::decay_t<View>>
+  auto query(ExecutionSpace &&space, UserPredicates const &user_predicates,
         CallbackOrView &&callback_or_view, View &&view, Args &&...args) const
   {
     Kokkos::Profiling::ScopedRegion guard("ArborX::BVH::query_crs");
@@ -120,16 +125,16 @@ public:
     if constexpr (use_convenient_shortcut)
     {
       // Simplified way to get APIv1 result using APIv2 interface
-      Details::CrsGraphWrapperImpl::queryDispatch(
+      return Details::CrsGraphWrapperImpl::queryDispatch(
           Tag{}, *this, space, Predicates{user_predicates},
           Details::LegacyDefaultCallback{}, // inject legacy callback arg
           std::forward<CallbackOrView>(callback_or_view),
           std::forward<View>(view), std::forward<Args>(args)...);
-      return;
+      // return;
     }
     else
     {
-      Details::CrsGraphWrapperImpl::queryDispatch(
+      return Details::CrsGraphWrapperImpl::queryDispatch(
           Tag{}, *this, space, Predicates{user_predicates},
           std::forward<CallbackOrView>(callback_or_view),
           std::forward<View>(view), std::forward<Args>(args)...);
@@ -190,13 +195,11 @@ using BVH = BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter,
 
 template <typename MemorySpace, typename Value, typename IndexableGetter,
           typename BoundingVolume>
-template <typename ExecutionSpace, typename UserValues,
-          typename SpaceFillingCurve>
+template <typename ExecutionSpace, typename UserValues>
 BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
-    BoundingVolumeHierarchy(ExecutionSpace const &space, // remove const to assign at the end of the constructor ?
+    BoundingVolumeHierarchy(ExecutionSpace const & /* space */, 
                             UserValues const &user_values,
-                            IndexableGetter const &indexable_getter,
-                            SpaceFillingCurve const &curve)
+                            IndexableGetter const &indexable_getter)
     : _size(AccessTraits<UserValues, PrimitivesTag>::size(user_values))
     , _leaf_nodes(Kokkos::view_alloc(/* space,*/ Kokkos::WithoutInitializing,
                                      "ArborX::BVH::leaf_nodes"),
@@ -205,6 +208,17 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
                                          "ArborX::BVH::internal_nodes"),
                       _size > 1 ? _size - 1 : 0)
     , _indexable_getter(indexable_getter)
+{}
+
+template <typename MemorySpace, typename Value, typename IndexableGetter,
+          typename BoundingVolume>
+template <typename ExecutionSpace, typename UserValues,
+          typename SpaceFillingCurve>
+auto BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::build(
+  ExecutionSpace&&space, // remove const to assign at the end of the constructor ?
+                            UserValues const &user_values,
+                            SpaceFillingCurve const &curve
+)
 {
   /* static_assert(Details::KokkosExt::is_accessible_from<MemorySpace,
                                                        ExecutionSpace>::value);*/
@@ -226,20 +240,20 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
 
   Kokkos::Profiling::ScopedRegion guard("ArborX::BVH::BVH");
 
-  if (empty())
-  {
-    return;
-  }
+  // if (empty()) // not caring about this case for now -> issue with return type
+  // {
+  //   return space;
+  // }
 
-  if (size() == 1)
-  {
-    Details::TreeConstruction::initializeSingleLeafTree(
-        space, values, _indexable_getter, _leaf_nodes, _bounds);
-    return;
-  }
+  // if (size() == 1) // not caring about this case for now -> issue with return type
+  // {
+  //   Details::TreeConstruction::initializeSingleLeafTree(
+  //       space, values, _indexable_getter, _leaf_nodes, _bounds);
+  //   return space;
+  // }
 
   Details::Indexables<Values, IndexableGetter> indexables{values,
-                                                          indexable_getter};
+                                                          _indexable_getter};
 
   Kokkos::Profiling::pushRegion(
       "ArborX::BVH::BVH::calculate_scene_bounding_box");
@@ -273,14 +287,12 @@ BoundingVolumeHierarchy<MemorySpace, Value, IndexableGetter, BoundingVolume>::
   Kokkos::Profiling::pushRegion("ArborX::BVH::BVH::generate_hierarchy");
 
   // Generate bounding volume hierarchy
-  /* decltype(auto) chain_hi = I'm modifying with a ref&
-     but a refactor might be needed.
-  */ Details::TreeConstruction::generateHierarchy(
+  decltype(auto) chain_hi = Details::TreeConstruction::generateHierarchy(
       chain_sort, values, _indexable_getter, permutation_indices,
       linear_ordering_indices, _leaf_nodes, _internal_nodes, _bounds);
 
   Kokkos::Profiling::popRegion();
-  // space = chain_hi;
+  return chain_hi;
 }
 
 template <typename MemorySpace, typename Value, typename IndexableGetter,
@@ -288,20 +300,20 @@ template <typename MemorySpace, typename Value, typename IndexableGetter,
 template <typename ExecutionSpace, typename UserPredicates, typename Callback>
 auto BoundingVolumeHierarchy<
     MemorySpace, Value, IndexableGetter,
-    BoundingVolume>::query(ExecutionSpace const &space,
+    BoundingVolume>::query(ExecutionSpace&& space,
                            UserPredicates const &user_predicates,
                            Callback const &callback,
                            Experimental::TraversalPolicy const &policy) const
 {
   static_assert(Details::KokkosExt::is_accessible_from<MemorySpace,
-                                                       ExecutionSpace>::value);
+                                                       typename std::remove_cvref_t<ExecutionSpace>::execution_space>::value);
   Details::check_valid_access_traits(PredicatesTag{}, user_predicates);
   Details::check_valid_callback<value_type>(callback, user_predicates);
 
   using Predicates = Details::AccessValues<UserPredicates, PredicatesTag>;
   static_assert(
       Details::KokkosExt::is_accessible_from<typename Predicates::memory_space,
-                                             ExecutionSpace>::value,
+                                             typename std::remove_cvref_t<ExecutionSpace>::execution_space>::value,
       "Predicates must be accessible from the execution space");
   Predicates predicates{user_predicates}; // NOLINT
 
@@ -329,7 +341,7 @@ auto BoundingVolumeHierarchy<
   if (policy._sort_predicates)
   {
     Kokkos::Profiling::pushRegion(profiling_prefix + "::compute_permutation");
-    using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
+    using DeviceType = Kokkos::Device<typename std::remove_cvref_t<ExecutionSpace>::execution_space, MemorySpace>;
     Box<GeometryTraits::dimension_v<bounding_volume_type>,
         typename GeometryTraits::coordinate_type_t<bounding_volume_type>>
         scene_bounding_box{};

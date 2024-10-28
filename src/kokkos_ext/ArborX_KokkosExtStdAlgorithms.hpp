@@ -49,13 +49,13 @@ struct Iota
 };
 
 template <typename ExecutionSpace, typename ViewType>
-auto iota(ExecutionSpace const &space, ViewType const &v,
+auto iota(ExecutionSpace&&space, ViewType const &v,
           typename ViewType::value_type value = 0)
 {
-  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value);
+//   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value);
   static_assert(Kokkos::is_view<ViewType>::value);
   static_assert(is_accessible_from<typename ViewType::memory_space,
-                                   ExecutionSpace>::value,
+                                   typename std::remove_cvref_t<ExecutionSpace>::execution_space>::value,
                 "View must be accessible from the execution space");
   static_assert(unsigned(ViewType::rank()) == unsigned(1),
                 "iota requires a View of rank 1");
@@ -70,7 +70,7 @@ auto iota(ExecutionSpace const &space, ViewType const &v,
 //   return space | Kokkos::parallel_for(
 //       "ArborX::Algorithms::iota", Kokkos::RangePolicy(space, 0, v.extent(0)),
 //       KOKKOS_LAMBDA(int i) { v(i) = value + (ValueType)i; });
-    return Iota{.data = v, .value = value}.apply(space);
+    return Iota{.data = v, .value = value}.apply(space); // bad forward
 }
 
 } // namespace ArborX::Details::KokkosExt
